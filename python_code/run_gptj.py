@@ -2,19 +2,28 @@ import re
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from sympy import symbols, sympify, diff, integrate, limit
+from fastapi import FastAPI
+from pydantic import BaseModel
 
-# Load GPT-J model and tokenizer
-def load_gptj_model():
-    print("Loading GPT-J model...")
-    model_name = "EleutherAI/gpt-j-6B"
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
-    print("Model loaded.")
-    return model, tokenizer, device
+################################################################################
+# 1. Define Our FastAPI App
+################################################################################
+app = FastAPI()
 
-# Utility function for handling calculus queries
-def handle_calculus_request(query):
+################################################################################
+# 2. Load Model at Startup (Optional: for Performance)
+################################################################################
+print("Loading GPT-J model...")
+model_name = "EleutherAI/gpt-j-6B"
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
+print("Model loaded.")
+
+################################################################################
+# 3. Your Existing Utility Functions
+################################################################################
+def handle_calculus_request(query: str) -> str:
     try:
         query = query.lower()
 
@@ -58,44 +67,48 @@ def handle_calculus_request(query):
     except Exception as e:
         return f"Error processing calculus query: {e}"
 
-# Detect whether the query is calculus-related
-def is_calculus_query(query):
+def is_calculus_query(query: str) -> bool:
     keywords = ["differentiate", "derivative", "integrate", "limit"]
     return any(keyword in query.lower() for keyword in keywords)
 
-# Main function
-def main():
-    # Load GPT-J model and tokenizer
-    model, tokenizer, device = load_gptj_model()
+################################################################################
+# 4. Define FastAPI Request Model
+################################################################################
+class QueryRequest(BaseModel):
+    query: str
 
-    print("\nWelcome to GPT-J with Calculus! Type 'exit' to quit.\n")
-    while True:
-        # Get user input
-        query = input("Enter your query: ").strip()
-        if query.lower() == "exit":
-            print("Exiting. Goodbye!")
-            break
+################################################################################
+# 5. Define Our Endpoints
+################################################################################
+@app.post("/generate")
+def generate(request: QueryRequest):
+    """
+    POST endpoint to handle both general GPT-J queries and calculus queries.
+    Example JSON body:
+    {
+      "query": "differentiate x^2 with respect to x"
+    }
+    """
+    query = request.query.strip()
+    if is_calculus_query(query):
+        response = handle_calculus_request(query)
+    else:
+        # Use GPT-J model for a general query
+        inputs = tokenizer(query, return_tensors="pt").to(device)
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=30,
+            temperature=0.2,
+            top_k=50,
+            do_sample=True
+        )
+        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-        # Check if the query is calculus-related
-        if is_calculus_query(query):
-            response = handle_calculus_request(query)
-        else:
-            # Process general GPT-J query
-            print("Thinking...")
-            inputs = tokenizer(query, return_tensors="pt").to(device)
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=30,
-                temperature=0.2,
-                top_k=50,
-                do_sample=True
-            )
-            response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    return {"response": response}
 
-        # Print the response
-        print("\nResponse:")
-        print(response)
-        print("-" * 50)
-
-if __name__ == "__main__":
-    main()
+################################################################################
+# Optional: A Simple Health Check or Root Endpoint
+################################################################################
+@app.get("/")
+def root():
+    return {"message": "Hello! GPT-J with Calculus is ready to go!"}
